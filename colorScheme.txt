@@ -1,0 +1,5 @@
+text|333745
+highlight|e63462
+lowlight|c7efcf
+accent1|fe5f55
+accent2|eef5db
