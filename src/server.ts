@@ -114,7 +114,9 @@ app.get("/api/meal-plan/grocery-list", async (_req, res) => {
     items = [];
   } else {
     try {
+      console.log("[grocery-list] lines before Claude merge:", allLines);
       const merged = await mergeGroceryLinesWithClaude(allLines);
+      console.log("[grocery-list] lines after Claude merge:", merged);
       items = merged.map((text) => ({ text, count: 1 }));
       mergeMethod = "claude";
     } catch (err) {
