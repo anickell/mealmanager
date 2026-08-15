@@ -1,19 +1,60 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
+import fs from "fs";
+import crypto from "crypto";
+import multer from "multer";
 import { db, Recipe, Tag, DAYS_OF_WEEK } from "./db";
 import { buildGroceryList, GroceryItem } from "./groceryList";
 import { mergeGroceryLinesWithClaude, ClaudeUnavailableError } from "./claudeGroceryMerge";
 
-const app = express();
+export const app = express();
 const PORT = process.env.PORT || 3000;
+
+const PUBLIC_DIR = path.join(__dirname, "public");
+const UPLOADS_DIR = process.env.MEALMANAGER_UPLOADS_DIR || path.join(PUBLIC_DIR, "uploads");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const THUMBNAIL_MIME_TYPES: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: UPLOADS_DIR,
+    filename: (_req, file, cb) => {
+      const ext = THUMBNAIL_MIME_TYPES[file.mimetype];
+      cb(null, `${crypto.randomUUID()}${ext}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!Object.prototype.hasOwnProperty.call(THUMBNAIL_MIME_TYPES, file.mimetype)) {
+      return cb(new Error("Thumbnail must be a JPEG, PNG, WEBP, or GIF image"));
+    }
+    cb(null, true);
+  },
+});
+
+function deleteUploadedFileIfLocal(imageUrl: string | null) {
+  if (!imageUrl || !imageUrl.startsWith("/uploads/")) return;
+  try {
+    fs.unlinkSync(path.join(UPLOADS_DIR, path.basename(imageUrl)));
+  } catch {
+    // Already gone; nothing to clean up.
+  }
+}
 
 app.use(express.urlencoded({ extended: true }));
 app.use((req, _res, next) => {
   if (!req.body) req.body = {};
   next();
 });
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(PUBLIC_DIR));
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 function tagsForRecipe(recipeId: number): Tag[] {
   return db
@@ -277,7 +318,7 @@ async function fetchSpoonacularDetail(spoonacularId: number) {
     ? steps.map((s: any) => `${s.number}. ${s.step}`).join("\n")
     : stripHtml(data.instructions || "");
 
-  return { title: data.title as string, ingredients, instructions };
+  return { title: data.title as string, ingredients, instructions, imageUrl: (data.image as string) || null };
 }
 
 app.post("/api/recipes/import/:spoonacularId", async (req, res) => {
@@ -301,8 +342,10 @@ app.post("/api/recipes/import/:spoonacularId", async (req, res) => {
     }
     const createRecipe = db.transaction(() => {
       const result = db
-        .prepare("INSERT INTO recipes (title, ingredients, instructions, spoonacular_id) VALUES (?, ?, ?, ?)")
-        .run(detail.title, detail.ingredients, detail.instructions, spoonacularId);
+        .prepare(
+          "INSERT INTO recipes (title, ingredients, instructions, spoonacular_id, image_url) VALUES (?, ?, ?, ?, ?)"
+        )
+        .run(detail.title, detail.ingredients, detail.instructions, spoonacularId, detail.imageUrl);
       setRecipeTags(Number(result.lastInsertRowid), tagIds);
       return result.lastInsertRowid;
     });
@@ -369,11 +412,51 @@ app.put("/api/recipes/:id", (req, res) => {
   }
 });
 
+app.post("/api/recipes/:id/thumbnail", (req, res) => {
+  upload.single("thumbnail")(req, res, (err) => {
+    if (err) {
+      const message =
+        err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE"
+          ? "Thumbnail must be 5MB or smaller"
+          : err.message;
+      return res.status(400).json({ error: message });
+    }
+
+    const recipeId = Number(req.params.id);
+    if (!req.file) {
+      return res.status(400).json({ error: "thumbnail file is required" });
+    }
+    if (!Number.isInteger(recipeId)) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "id must be an integer" });
+    }
+
+    const existing = db.prepare("SELECT image_url FROM recipes WHERE id = ?").get(recipeId) as
+      | { image_url: string | null }
+      | undefined;
+    if (!existing) {
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ error: "Recipe not found" });
+    }
+
+    const imageUrl = `/uploads/${req.file.filename}`;
+    db.prepare("UPDATE recipes SET image_url = ? WHERE id = ?").run(imageUrl, recipeId);
+    deleteUploadedFileIfLocal(existing.image_url);
+    res.status(200).json({ image_url: imageUrl });
+  });
+});
+
 app.delete("/api/recipes/:id", (req, res) => {
+  const existing = db.prepare("SELECT image_url FROM recipes WHERE id = ?").get(req.params.id) as
+    | { image_url: string | null }
+    | undefined;
   db.prepare("DELETE FROM recipes WHERE id = ?").run(req.params.id);
+  if (existing) deleteUploadedFileIfLocal(existing.image_url);
   res.status(204).end();
 });
 
-app.listen(PORT, () => {
-  console.log(`Meal Manager running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Meal Manager running at http://localhost:${PORT}`);
+  });
+}

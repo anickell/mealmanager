@@ -12,6 +12,7 @@ db.exec(`
     ingredients TEXT NOT NULL,
     instructions TEXT NOT NULL,
     spoonacular_id INTEGER,
+    image_url TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
@@ -22,6 +23,9 @@ db.exec(`
   const cols = db.prepare("PRAGMA table_info(recipes)").all() as { name: string }[];
   if (!cols.some((c) => c.name === "spoonacular_id")) {
     db.exec("ALTER TABLE recipes ADD COLUMN spoonacular_id INTEGER");
+  }
+  if (!cols.some((c) => c.name === "image_url")) {
+    db.exec("ALTER TABLE recipes ADD COLUMN image_url TEXT");
   }
 }
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_spoonacular_id ON recipes(spoonacular_id)");
@@ -83,6 +87,7 @@ export interface Recipe {
   ingredients: string;
   instructions: string;
   spoonacular_id: number | null;
+  image_url: string | null;
   created_at: string;
 }
 

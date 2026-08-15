@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.db
 .env
+src/public/uploads/

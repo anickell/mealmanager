@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Add a Recipe — Meal Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Irish+Grover&family=Jolly+Lodger&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1><span class="word-meal">Meal</span><span class="word-manager">Manager</span></h1>
+    <p>Your recipe box, organized.</p>
+    <nav class="site-nav">
+      <a href="index.html">Recipes</a>
+      <a href="add-recipe.html" class="active">Add a Recipe</a>
+    </nav>
+  </header>
+
+  <main>
+    <h2 class="section-title" id="page-title">Add a Recipe</h2>
+    <form id="recipe-form" class="card">
+      <label for="title">Title</label>
+      <input type="text" id="title" placeholder="Recipe title" required />
+
+      <label for="ingredients">Ingredients</label>
+      <textarea id="ingredients" placeholder="Ingredients (one per line)" required></textarea>
+
+      <label for="instructions">Instructions</label>
+      <textarea id="instructions" placeholder="Instructions" required></textarea>
+
+      <label>Tags</label>
+      <div id="tag-checkboxes"><em>No tags yet — add one on the Recipes page.</em></div>
+
+      <label for="thumbnail">Thumbnail Image</label>
+      <img id="thumbnail-preview" style="display:none; width:120px; height:120px; object-fit:cover; border-radius:8px;" />
+      <input type="file" id="thumbnail" accept="image/jpeg,image/png,image/webp,image/gif" />
+
+      <input type="hidden" id="edit-id" />
+      <p id="thumbnail-error" class="error"></p>
+      <button type="submit" id="submit-btn">Add Recipe</button>
+      <button type="button" id="cancel-btn" style="display:none">Cancel</button>
+    </form>
+  </main>
+
+  <script>
+    const form = document.getElementById("recipe-form");
+    const tagCheckboxesEl = document.getElementById("tag-checkboxes");
+    const editIdInput = document.getElementById("edit-id");
+    const submitBtn = document.getElementById("submit-btn");
+    const cancelBtn = document.getElementById("cancel-btn");
+    const pageTitleEl = document.getElementById("page-title");
+    const thumbnailInput = document.getElementById("thumbnail");
+    const thumbnailPreview = document.getElementById("thumbnail-preview");
+    const thumbnailErrorEl = document.getElementById("thumbnail-error");
+    const editId = new URLSearchParams(window.location.search).get("editId");
+
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    async function loadTagCheckboxes(checkedTagIds = new Set()) {
+      const res = await fetch("/api/tags");
+      const tags = await res.json();
+      tagCheckboxesEl.innerHTML = tags.length
+        ? tags.map(t => `
+            <label><input type="checkbox" name="tagIds" value="${t.id}" ${checkedTagIds.has(String(t.id)) ? "checked" : ""} /> ${escapeHtml(t.name)}</label>
+          `).join("")
+        : "<em>No tags yet — add one on the Recipes page.</em>";
+    }
+
+    async function loadForEdit() {
+      const res = await fetch(`/api/recipes/${editId}`);
+      if (!res.ok) {
+        window.location.href = "index.html";
+        return;
+      }
+      const r = await res.json();
+      document.getElementById("title").value = r.title;
+      document.getElementById("ingredients").value = r.ingredients;
+      document.getElementById("instructions").value = r.instructions;
+      editIdInput.value = r.id;
+      submitBtn.textContent = "Save Changes";
+      cancelBtn.style.display = "inline-block";
+      pageTitleEl.textContent = "Edit Recipe";
+      if (r.image_url) {
+        thumbnailPreview.src = r.image_url;
+        thumbnailPreview.style.display = "block";
+      }
+      await loadTagCheckboxes(new Set(r.tags.map(t => String(t.id))));
+    }
+
+    thumbnailInput.addEventListener("change", () => {
+      const file = thumbnailInput.files[0];
+      if (!file) return;
+      thumbnailPreview.src = URL.createObjectURL(file);
+      thumbnailPreview.style.display = "block";
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      thumbnailErrorEl.textContent = "";
+      const title = document.getElementById("title").value;
+      const ingredients = document.getElementById("ingredients").value;
+      const instructions = document.getElementById("instructions").value;
+      const tagIds = Array.from(tagCheckboxesEl.querySelectorAll("input[name=tagIds]:checked")).map(el => el.value);
+      const id = editIdInput.value;
+      const params = new URLSearchParams({ title, ingredients, instructions });
+      for (const tagId of tagIds) params.append("tagIds", tagId);
+      const res = await fetch(id ? `/api/recipes/${id}` : "/api/recipes", {
+        method: id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params,
+      });
+
+      const recipeId = id || (await res.json()).id;
+      const thumbnailFile = thumbnailInput.files[0];
+      if (thumbnailFile) {
+        const formData = new FormData();
+        formData.append("thumbnail", thumbnailFile);
+        const uploadRes = await fetch(`/api/recipes/${recipeId}/thumbnail`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!uploadRes.ok) {
+          const { error } = await uploadRes.json();
+          thumbnailErrorEl.textContent = `Recipe saved, but thumbnail upload failed: ${error}`;
+          return;
+        }
+      }
+      window.location.href = "index.html";
+    });
+
+    cancelBtn.addEventListener("click", () => {
+      window.location.href = "index.html";
+    });
+
+    if (editId) {
+      loadForEdit();
+    } else {
+      loadTagCheckboxes();
+    }
+  </script>
+</body>
+</html>
